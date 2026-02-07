@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'channels',
     'rest_framework',
     'teemog1_api',
+    'django_extensions',
 ]
 
 MIDDLEWARE = [
@@ -161,3 +162,13 @@ MEDIA_URL = '/media/'
 # Django 会将上传的文件保存到这个物理路径下
 # 例如: your_project_root/media/
 MEDIA_ROOT = BASE_DIR / 'media'
+
+ONLY_LOGIN = False
+
+
+QQ_QR_URL = 'https://qm.qq.com/q/'
+
+# 糖猫g1交流群：1070956338
+TEEMOG1_QQ_CODE = 'rLGx8hsfV6'
+
+

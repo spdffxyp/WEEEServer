@@ -7,7 +7,7 @@ from datetime import datetime
 
 from django.utils.text import Truncator
 
-from .models import WatchDevice, LocationPackage, LocationData, Contact, CallRecord, ChatLog
+from .models import WatchDevice, LocationPackage, LocationData, Contact, CallRecord, ChatLog, SmsMessage
 
 
 # --- 1. 定制 LocationPackage 的管理界面 (保持不变或简化) ---
@@ -41,6 +41,7 @@ class LocationPackageAdmin(admin.ModelAdmin):
 # 这个界面主要用于单独查看所有定位数据点
 @admin.register(LocationData)
 class LocationDataAdmin(admin.ModelAdmin):
+    ordering = ('-stamp',)
     list_display = ('stamp_formatted', 'package_link', 'power', 'signal', 'sos')
     readonly_fields = [field.name for field in LocationData._meta.fields]
     list_filter = ('created_at',)
@@ -59,7 +60,7 @@ class LocationDataAdmin(admin.ModelAdmin):
             return mark_safe(f'<a href="{url}">{obj.package.msg_id}</a>')
         return "N/A"
 
-    @admin.display(description='时间')
+    @admin.display(description='时间', ordering='stamp')
     def stamp_formatted(self, obj):
         if obj.stamp:
             return datetime.fromtimestamp(obj.stamp).strftime('%Y-%m-%d %H:%M:%S')
@@ -352,3 +353,10 @@ class ChatLogAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         # 允许删除记录，方便清理测试数据。如果不想允许删除，改为 return False
         return True
+
+
+@admin.register(SmsMessage)
+class SmsAdmin(admin.ModelAdmin):
+    # 列表页显示哪些字段
+    list_display = (
+        'device', 'phone', 'message', 'error_cause', 'stamp')

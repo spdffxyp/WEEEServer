@@ -15,6 +15,7 @@ class WatchDevice(models.Model):
     # ssn 在 miscdata 分区，PhaseCheckParse 类会读取这个文件的内容，从第68个字节开始，读取64个字节，最后截取前46个字符作为 ssn 的值
     ssn = models.CharField(max_length=200, blank=True, null=True)
     mac = models.CharField(max_length=32, blank=True, null=True)
+    iccid = models.CharField(max_length=32, blank=True, null=True, verbose_name="ICCID")
 
     # 激活和会话信息
     baby_id = models.BigIntegerField(unique=True, help_text="手表用户的唯一ID")
@@ -49,7 +50,7 @@ class LocationPackage(models.Model):
     device = models.ForeignKey(WatchDevice, on_delete=models.SET_NULL, null=True, related_name='location_packages')
     # 定位信息
     msg_id = models.CharField(max_length=50, help_text="手表端生成的数据包ID")
-    strategy = models.IntegerField(default=0, blank=True, help_text="定位策略")
+    strategy = models.IntegerField(default=0, blank=True, null=True, help_text="定位策略")
     # 自动记录创建时间，便于排序和追踪
     received_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
@@ -69,6 +70,17 @@ class LocationData(models.Model):
     signal = models.IntegerField(null=True, blank=True, help_text="信号强度")
     sos = models.IntegerField(default=0, help_text="SOS状态, 0: 否, 1: 是")
     reply_loc = models.IntegerField(null=True, blank=True, help_text="定位上报类型")
+    isGps = models.IntegerField(null=True, blank=True, default=0)
+    gps_time_duration = models.IntegerField(null=True, blank=True, default=0)
+    gps_time_type = models.IntegerField(null=True, blank=True, default=0)
+    gps_timeout = models.IntegerField(null=True, blank=True, default=0)
+    search_count = models.IntegerField(null=True, blank=True, default=0)
+    wifi_1 = models.IntegerField(null=True, blank=True, default=0)
+    wifi_2 = models.IntegerField(null=True, blank=True, default=0)
+    wifi_3 = models.IntegerField(null=True, blank=True, default=0)
+    wifi_1_valid = models.IntegerField(null=True, blank=True, default=0)
+    wifi_2_valid = models.IntegerField(null=True, blank=True, default=0)
+    wifi_3_valid = models.IntegerField(null=True, blank=True, default=0)
 
     # 使用 TextField 存储可能很长的字符串
     geo_encrypted = models.TextField(blank=True, help_text="加密后的原始geo数据")
@@ -227,4 +239,21 @@ class ChatLog(models.Model):
 
     def __str__(self):
         return f"Chat from {self.from_user_id} to {self.to_id} ({self.get_content_type_display()})"
+
+
+class SmsMessage(models.Model):
+    """短信记录"""
+    device = models.ForeignKey(WatchDevice, on_delete=models.CASCADE, related_name='sms_logs', verbose_name="关联设备")
+    message = models.TextField(blank=True, null=True, verbose_name="文本内容")
+    phone = models.CharField(max_length=30, help_text="电话号码")
+    error_cause = models.CharField(max_length=16, verbose_name="错误码")
+    stamp = models.DateTimeField(verbose_name="消息时间戳")
+
+    class Meta:
+        verbose_name = "短信记录"
+        verbose_name_plural = verbose_name
+        ordering = ['-stamp']
+
+    def __str__(self):
+        return f"{self.phone}：{self.message[:10]}"
 

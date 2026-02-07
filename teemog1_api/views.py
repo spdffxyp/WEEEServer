@@ -1,4 +1,5 @@
 import os
+import uuid
 from json import JSONDecodeError
 
 from django.core.files.storage import FileSystemStorage
@@ -82,20 +83,56 @@ def print_request_details(req):
 
 @api_view(['GET'])
 def get_apps(request):
-    print_request_details(request) # 调用新函数
+    print_request_details(request)
     print("[*] 正在响应应用列表请求...")
+
+    # 构造应用列表数据 (对应 AppStoreBean)
+    app_list = [
+        {
+            "id": 1,
+            "name": "聊天",
+            "package_name": "com.sogou.teemo.watch.chat",
+            "icon_url": "http://192.168.2.99:8000/static/icon/chat.png",  # 替换为你实际的图标地址
+            "version": "1",
+            "version_format": "1",
+            "pkg_url": "http://192.168.2.99:8000/static/apk/chat.apk",  # 替换为实际APK下载地址
+            "pkg_size": 1024 * 1024 * 5,  # 5MB，单位字节
+            "pkg_hashcode": "md5_of_apk",  # 如果有校验逻辑，这里需要真实的MD5
+            "status": 1,  # 状态码很重要，通常 0:下载 1:更新 3:打开 等，具体需测试
+            "content_type": 1,
+            "display_version": "1",
+            "description": "这是聊天应用",
+            "digest": "聊天应用简介"
+        },
+        {
+            "id": 2,
+            "name": "电话",
+            "package_name": "com.sogou.teemo.watch.phone",
+            "version": "1",
+            "pkg_url": "",
+            "status": 3  # 假设3是已安装/系统应用
+        }
+    ]
+
     apps_response = {
-        "message": {"content": "成功", "notice": ""},
+        "code": 200,
+        "status": 200,  # 外层状态码，视框架而定，有些是 code: 0
+        "msg": "success",
         "data": {
-            "apps": [
-                {"package_name": "com.sogou.teemo.watch.chat", "name": "聊天", "version": "1", "id": 1, "status": 3},
-                {"package_name": "com.sogou.teemo.watch.phone", "name": "电话", "version": "1", "id": 2, "status": 3},
-                # ...可以添加更多应用...
-            ],
-            "version": int(time.time())
+            # 对应 AppStoreServerBean
+            "apps": {
+                # 对应 AppStoreServerBean.Apps 内部类
+                "data": app_list,  # <--- 这才是真正的列表，名字必须叫 data
+                "page_index": 1,
+                "page_size": 20,
+                "total_count": len(app_list)
+            },
+            # 对应 AppStoreServerBean.installed_apps
+            "installed_apps": []
         }
     }
-    print(f"[*] 响应内容{apps_response}")
+
+    print(f"[*] 响应内容: {apps_response}")
     return JsonResponse(apps_response)
 
 
@@ -417,6 +454,114 @@ def update_contact(request):
     except Exception as e:
         print(f"[!] 更新联系人时发生数据库错误: {e}")
         return JsonResponse({"code": 500, "message": "服务器内部错误"}, status=500)
+
+# ########### 糖猫android客户端
+
+
+@api_view(['GET'])
+def passport_login(request):
+    print_request_details(request)
+    print("[*] 正在响应 Passport 登录请求...")
+
+    # 1. 从请求中获取关键参数，必须原样返回
+    # App 发送了 stamp 和 timestamp 两个参数，内容一样，我们取一个即可
+    client_stamp = request.query_params.get('stamp')
+    if not client_stamp:
+        client_stamp = request.query_params.get('timestamp')
+
+    client_udid = request.query_params.get('udid', '')
+    client_sgid = request.query_params.get('sgid', '')
+
+    # 2. 生成服务器端的数据
+    # 生成一个唯一的 session token，这是最重要的字段
+    session_token = f"fake-token-{uuid.uuid4()}"
+
+    # 生成服务器当前的时间戳 (毫秒)
+    server_timestamp_ms = str(int(time.time() * 1000))
+
+    # 3. 构造 PassportLoginBean 对应的数据 payload
+    passport_data = {
+        # --- 关键字段 ---
+        "token": session_token,
+        "user_id": "fake_user_from_server_001",
+
+        # --- 流程控制字段 ---
+        "profile_completed": 1,  # 1 = 已完善资料，App会进入主页
+        "timo_binded": 1,  # 1 = 已绑定手表，App会进入主页
+
+        # --- 必须原样返回的字段 ---
+        "client_stamp": client_stamp,
+        "client_udid": client_udid,
+        "client_sgid": client_sgid,
+        "client_device": "android",
+
+        # --- 其他字段 ---
+        "service_stamp": server_timestamp_ms,
+        "client_token": ""  # 这个字段似乎没用，可以返回空字符串
+    }
+
+    # 4. 构造最外层的 HttpData 包装对象
+    final_response = {
+        "code": 200,
+        "msg": "登录成功",
+        "data": passport_data
+    }
+
+    print(f"[*] 响应内容: {final_response}")
+    return JsonResponse(final_response)
+
+
+@api_view(['GET'])
+def android_client_user_info(request):
+    print_request_details(request)
+    print("[*] 正在响应 Passport 登录请求...")
+
+    # 1. 从请求中获取关键参数，必须原样返回
+    # App 发送了 stamp 和 timestamp 两个参数，内容一样，我们取一个即可
+    client_stamp = request.query_params.get('stamp')
+    if not client_stamp:
+        client_stamp = request.query_params.get('timestamp')
+
+    client_udid = request.query_params.get('udid', '')
+    client_sgid = request.query_params.get('sgid', '')
+
+    # 2. 生成服务器端的数据
+    # 生成一个唯一的 session token，这是最重要的字段
+    session_token = f"fake-token-{uuid.uuid4()}"
+
+    # 生成服务器当前的时间戳 (毫秒)
+    server_timestamp_ms = str(int(time.time() * 1000))
+
+    # 3. 构造 PassportLoginBean 对应的数据 payload
+    passport_data = {
+        # --- 关键字段 ---
+        "token": session_token,
+        "user_id": "fake_user_from_server_001",
+
+        # --- 流程控制字段 ---
+        "profile_completed": 1,  # 1 = 已完善资料，App会进入主页
+        "timo_binded": 1,  # 1 = 已绑定手表，App会进入主页
+
+        # --- 必须原样返回的字段 ---
+        "client_stamp": client_stamp,
+        "client_udid": client_udid,
+        "client_sgid": client_sgid,
+        "client_device": "android",
+
+        # --- 其他字段 ---
+        "service_stamp": server_timestamp_ms,
+        "client_token": ""  # 这个字段似乎没用，可以返回空字符串
+    }
+
+    # 4. 构造最外层的 HttpData 包装对象
+    final_response = {
+        "code": 200,
+        "msg": "登录成功",
+        "data": passport_data
+    }
+
+    print(f"[*] 响应内容: {final_response}")
+    return JsonResponse(final_response)
 
 
 def catch_all(request, path):

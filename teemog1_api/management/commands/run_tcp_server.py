@@ -6,8 +6,10 @@ import time
 import uuid
 import base64
 import os
+import zlib
 from datetime import datetime
 from datetime import timezone as datetimezone
+from urllib.parse import urlencode
 import redis.asyncio as redis  # 使用异步 redis 库
 from django.conf import settings
 
@@ -15,7 +17,7 @@ from django.core.management.base import BaseCommand
 from channels.db import database_sync_to_async
 from django.utils import timezone
 
-from teemog1_api.models import WatchDevice, LocationPackage, LocationData, Contact, CallRecord, ChatLog
+from teemog1_api.models import WatchDevice, LocationPackage, LocationData, Contact, CallRecord, ChatLog, SmsMessage
 from django.contrib.auth.models import User
 from teemog1_api.NativeUtils import NativeUtils
 
@@ -26,9 +28,9 @@ logger = logging.getLogger(__name__)
 
 # --- 配置 ---
 TCP_HOST = '0.0.0.0'
-TCP_PORT = 5001
-CERT_FILE = './server.crt'  # 证书和私钥路径
-KEY_FILE = './server.key'
+TCP_PORT = 59093
+CERT_FILE = './ca.crt'  # 证书和私钥路径
+KEY_FILE = './ca.key'
 CLIENTS = {}
 
 
@@ -107,6 +109,25 @@ def parse_chat_message_packet(payload: bytes):
     except (struct.error, json.JSONDecodeError, UnicodeDecodeError) as e:
         logger.error(f"[!] 解析聊天消息载荷失败: {e}")
         return None, None
+
+
+def parse_teemo_zlib_packet(data):
+    if len(data) < 7:
+        return None, None
+    length, version, msg_type = struct.unpack('>i', b'\x00' + data[:3])[0], data[3], data[4]
+    # logger.debug(f"[*] 解析TCP包: 声明长度=0x{length:02x}, 版本=0x{version:02x}, 类型=0x{msg_type:02x}")
+    payload_zlib = data[5:]
+    try:
+        payload = zlib.decompress(payload_zlib)
+    except zlib.error as e:
+        logger.error(f"[!] 解压payload失败: {e}\n    原始Payload: {payload}")
+        return payload, None
+    try:
+        json_data = json.loads(payload.decode('utf-8'))
+        return json_data, None
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        logger.error(f"[!] 解析JSON失败: {e}\n    原始Payload: {payload}")
+        return payload, None
 
 
 def parse_teemo_packet(data):
@@ -205,8 +226,8 @@ def handle_login_request_db(device_instance: WatchDevice | None, req_json_data: 
         # 用于绑定的二维码信息
         # 当 binded 为 0 时，手表会使用这两个字段来生成并显示二维码
         # 二维码的内容为qr_url+qr_code
-        "qr_code": "" if device.is_bound else "123456",
-        "qr_url": "" if device.is_bound else "654321",
+        "qr_code": "" if device.is_bound else settings.TEEMOG1_QQ_CODE + f"?{urlencode({'u':udid, 'i': imei})}",
+        "qr_url": "" if device.is_bound else settings.QQ_QR_URL,
         # 服务号码
         # SmsReceiver.java 中，手表可能会向这个号码发送包含加密后IMSI的短信
         "service_number": "10086",
@@ -237,18 +258,49 @@ def handle_weather_request(device_instance: WatchDevice, req_json_data: dict, **
     """
     if not device_instance or not isinstance(req_json_data, dict):
         return
-    logger.debug("[*] 检测到天气请求 (类型 123,20)，正在构造成功响应...")
     weather_response = {
         "status": 1,
         "msg": "",
         "sub_type": 20, "user_id": device_instance.udid,
-        "data": {
-            "info": {"weather": "晴", "temp_now": 25, "aq": "优", "pm25": 30, "icon": "qing", "title": "今天天气不错！",
-                     "wind": "微风"},
-            "forcast": [{"date": "今天", "temp_high": 28, "temp_low": 18, "icon": "qing"},
-                        {"date": "明天", "temp_high": 29, "temp_low": 19, "icon": "duoyun"}],
-            "life": {"cy": "适宜", "cy_desc": "适合穿衣", "dl": "适宜", "dl_desc": "适合锻炼", "gm_desc": "不易感冒", "zwx": "中等",
-                     "zwx_desc": "紫外线中等"}
+        "data": {}
+    }
+    # if settings.ONLY_LOGIN:
+    #     return create_teemo_response_packet(123, weather_response)
+    logger.debug("[*] 检测到天气请求 (类型 123,20)，正在构造成功响应...")
+    weather_response['data'] = {
+        "info": {
+            "aq": "优",
+            "icon": "qing",
+            "mositure": "",
+            "pm25": 30,
+            "temp_now": 25,
+            "title": "今天天气不错！",
+            "weather": "晴",
+            "wind": "微风"
+        },
+        "forcast": [
+            {
+                "date": datetime.datetime.now().strftime("%m.%d"),  # 生成 "02.07"
+                "icon": "qing",
+                "temp_high": 28,
+                "temp_low": 18,
+            },
+            {
+                "date": (datetime.datetime.now()+datetime.timedelta(days=1)).strftime("%m.%d"),
+                "icon": "duoyun",
+                "temp_high": 29,
+                "temp_low": 19,
+            }
+        ],
+        "life": {
+            "cy": "适宜",
+            "cy_desc": "适合穿衣",
+            "dl": "适宜",
+            "dl_desc": "适合锻炼",
+            "gm": "感冒",
+            "gm_desc": "不易感冒",
+            "zwx": "中等",
+            "zwx_desc": "紫外线中等"
         }
     }
     response_packet = create_teemo_response_packet(123, weather_response)
@@ -260,6 +312,8 @@ def handle_add_contact_push_db(device_instance: WatchDevice, new_contact_user_id
     """
     为单个新增联系人构造一个 "type": "add" 的推送包。
     """
+    if settings.ONLY_LOGIN:
+        return None
     try:
         contact = Contact.objects.get(device=device_instance, user_id=new_contact_user_id)
     except Contact.DoesNotExist:
@@ -316,6 +370,8 @@ def handle_contact_request_db(device_instance: WatchDevice, req_json_data: dict,
     处理联系人同步请求，从数据库查询并构造响应包。
     接收一个 WatchDevice 实例作为参数。
     """
+    if settings.ONLY_LOGIN:
+        return None
     if not device_instance or not isinstance(req_json_data, dict):
         return
     logger.debug("[*] 检测到联系人请求 (类型 123,2)，正在构造成功响应...")
@@ -392,10 +448,37 @@ def handle_contact_request_db(device_instance: WatchDevice, req_json_data: dict,
 
 
 @database_sync_to_async
+def handle_sms_record_db(device_instance: WatchDevice, sms_data: dict, **kwargs):
+    """
+    处理短信上报，并将其存入数据库
+    """
+    if settings.ONLY_LOGIN:
+        return None
+    if not device_instance:
+        return None
+    sms_log = SmsMessage.objects.create(
+        device=device_instance,                # 必须填入关联的 WatchDevice 实例
+        message=sms_data.get('message', ''),       # 获取短信内容
+        phone=sms_data.get('phone', ''),           # 获取电话号码
+        error_cause=int(sms_data.get('error_cause', '0')),
+        stamp=timezone.now()                 # 生成当前时间戳（秒级），如果需要毫秒则 *1000
+    )
+    return
+    # 清空所有短信
+    # return create_teemo_response_packet(28, {"status": 1, "msg": ""})
+    # 给指定号码发短信
+    # return create_teemo_response_packet(57, {"phone": 10086, "msg": "abc"})
+    # 给service_number发imsi_xxx
+    # return create_teemo_response_packet(57, {"service_number": 10086, "msg": ""})
+
+
+@database_sync_to_async
 def handle_call_record_db(device_instance: WatchDevice, record_data: dict, **kwargs):
     """
     处理通话记录上报，并将其存入数据库
     """
+    if settings.ONLY_LOGIN:
+        return None
     if not device_instance or 'recents' not in record_data:
         return None
 
@@ -473,8 +556,11 @@ def handle_location_msg(device_instance: WatchDevice, req_json_data: dict, **kwa
     """
     if not device_instance or not isinstance(req_json_data, dict):
         return
-    logger.debug("[*] 检测到位置消息 (类型 11)，正在构造成功响应...")
+    # 11: 老协议teemo_G1
+    # 0x7d: 新协议teemo_K1
+    logger.debug("[*] 检测到位置消息 (类型 11 / 0x7d)，正在构造成功响应...")
 
+    msg_type = kwargs.get('kwargs', 11)
     package_id = req_json_data.get('id')
     if not package_id:
         logger.error(f"params id invalid: {package_id}")
@@ -483,8 +569,8 @@ def handle_location_msg(device_instance: WatchDevice, req_json_data: dict, **kwa
         logger.error(f"params data invalid: {data}")
         return
     strategy = req_json_data.get('strategy')
-    if not strategy:
-        logger.error(f"params strategy invalid: {strategy}")
+    # if not strategy:
+    #     logger.error(f"params strategy invalid: {strategy}")
 
     # 查找或创建设备
     location_package = LocationPackage.objects.create(
@@ -509,8 +595,27 @@ def handle_location_msg(device_instance: WatchDevice, req_json_data: dict, **kwa
         sos = _data.get('sos', 0)
         geo = _data.get('geo', '')
         geo_data = ''
+        isGps = _data.get('isGps', 0)
+        gps_time_duration = _data.get('gps_time', {}).get('duration', 0)
+        gps_time_type = _data.get('gps_time', {}).get('type', 0)
+        gps_timeout = _data.get('gps_timeout', 0)
+        search_count = _data.get('search_count', 0)
+        wifi_1 = _data.get('wifi_1', 0)
+        wifi_2 = _data.get('wifi_2', 0)
+        wifi_3 = _data.get('wifi_3', 0)
+        wifi_1_valid = _data.get('wifi_1_valid', 0)
+        wifi_2_valid = _data.get('wifi_2_valid', 0)
+        wifi_3_valid = _data.get('wifi_3_valid', 0)
         if geo:
-            geo_data = NativeUtils.decrypt(base64.decodebytes(geo.encode('utf8')), 5)
+            try:
+                if isinstance(geo, str):
+                    geo_data = NativeUtils.decrypt(base64.decodebytes(geo.encode('utf8')), 5)
+                elif isinstance(geo, dict):
+                    geo_data = json.dumps(geo)
+                else:
+                    geo_data = geo
+            except:
+                geo_data = ''
         LocationData.objects.create(
             package=location_package,
             # 数据点信息
@@ -524,7 +629,7 @@ def handle_location_msg(device_instance: WatchDevice, req_json_data: dict, **kwa
             valid_wifis=valid_wifi,
             created_at=timezone.now()
         )
-    response_packet = create_teemo_response_packet(11, {"status": 1, "msg": ""})
+    response_packet = create_teemo_response_packet(11, {"status": 1, "msg": "", "id": package_id})
     return response_packet
 
 
@@ -690,6 +795,11 @@ message_dispatcher = {
         'parser': parse_teemo_packet,
         'handler': handle_location_msg,
     },
+    0x7d: {
+        'type': 'location',
+        'parser': parse_teemo_zlib_packet,
+        'handler': handle_location_msg,
+    },
     0x2d: {
         'type': 'status',
         'parser': parse_teemo_packet,
@@ -699,6 +809,11 @@ message_dispatcher = {
         'type': 'call record',
         'parser': parse_teemo_packet,
         'handler': handle_call_record_db,
+    },
+    0x39: {
+        'type': 'sms message',
+        'parser': parse_teemo_packet,
+        'handler': handle_sms_record_db,
     },
     0x7b: {
         'type': 'general',
@@ -796,7 +911,7 @@ async def handle_client(reader, writer):
                     break
 
                 json_payload, byte_payload = parser(packet_data)
-                response_packet = await handler(device_instance, json_payload, binary_payload=byte_payload)
+                response_packet = await handler(device_instance, json_payload, binary_payload=byte_payload, msg_type=msg_type)
 
                 if 0x14 == msg_type and isinstance(response_packet, tuple) and 2 == len(response_packet):
                     instance, response_packet = response_packet
@@ -804,100 +919,6 @@ async def handle_client(reader, writer):
                         device_instance = instance
                         CLIENTS[device_instance.udid] = writer  # 注册
                         logger.info(f"[*] 设备 {device_instance.udid} 已注册到 TCP 服务器。当前连接数: {len(CLIENTS)}")
-
-                # json_payload, byte_payload = parse_teemo_packet(packet_data)
-
-                # data = await reader.read(4096)
-                # if not data:
-                #     logger.warning(f"[-] 来自 {addr} 的连接已关闭。")
-                #     break
-                #
-                # logger.debug(f"\n--- TCP数据收到于: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
-                # logger.debug(f"  原始数据: {data}")
-                # logger.debug(f"  原始十六进制: {data.hex()}")
-                # json_payload, byte_payload = parse_teemo_packet(data)
-
-                # response_packet = error_packet
-                # if msg_type == 0x14:  # 20
-                #     if not isinstance(json_payload, dict):
-                #         logger.warning("[警告] 数据格式错误。")
-                #         break
-                #     logger.debug(f"[*] 收到登录消息 (类型 {msg_type})")
-                #     instance, resp_data = await handle_login_request_db(json_payload)
-                #     if instance and resp_data:
-                #         device_instance = instance
-                #         CLIENTS[device_instance.udid] = writer  # 注册
-                #         logger.info(f"[*] 设备 {device_instance.udid} 已注册到 TCP 服务器。当前连接数: {len(CLIENTS)}")
-                #         response_packet = create_teemo_response_packet(0x14, resp_data)
-                #
-                # elif msg_type == 0x7a:  # 122, 聊天消息
-                #     if not device_instance:
-                #         logger.warning(f"[警告] 收到聊天消息 (类型 {msg_type})，但设备尚未登录。")
-                #         break  # 中断循环，可能会关闭连接
-                #
-                #     logger.debug(f"[*] 收到聊天消息 (类型 {msg_type})")
-                #     # 使用新的解析函数处理载荷
-                #     json_payload, binary_payload = parse_chat_message_packet(json_payload)
-                #     if json_payload:
-                #         response_packet = await handle_chat_message_db(device_instance, json_payload, binary_payload)
-                #     else:
-                #         logger.error("[!] 无法解析聊天消息，不发送 ACK。")
-                #         response_packet = None # 设为 None 以避免发送默认的 error_packet
-                #
-                # else:
-                #     if not device_instance:
-                #         logger.warning(f"[警告] 收到 {msg_type} 类型消息，但设备尚未登录。")
-                #         # TODO: 返回错误信息？？
-                #         break
-                #     if not isinstance(json_payload, dict):
-                #         logger.warning("[警告] 数据格式错误。")
-                #         break
-                #
-                #     if msg_type == 0x01:
-                #         logger.debug(f"[*] 收到PING消息 (类型 {msg_type})")
-                #         response_packet = await update_device_status_db(device_instance, json_payload)
-                #
-                #     elif msg_type == 0x0b:  # 11, 位置上报
-                #         logger.debug(f"[*] 收到位置消息 (类型 {msg_type})")
-                #         response_packet = await handle_location_msg(device_instance, json_payload)
-                #
-                #     elif msg_type == 0x2d:  # 45, 状态上报
-                #         logger.debug(f"[*] 收到状态消息 (类型 {msg_type})")
-                #         response_packet = await handle_status_msg(device_instance, json_payload)
-                #
-                #     elif msg_type == 0x34:  # 52, 通话记录
-                #         logger.debug(f"[*] 收到通话记录消息 (类型 {msg_type})")
-                #         response_packet = await handle_call_record_db(device_instance, json_payload)
-                #
-                #     elif msg_type == 0x7b:  # 123
-                #         if isinstance(json_payload, dict) and "sub_type" in json_payload:
-                #             sub_type = json_payload["sub_type"]
-                #             logger.debug(f"[*] 收到通用消息 (类型 123)")
-                #
-                #             if sub_type == 20:  # 天气
-                #                 logger.debug(f"[*] 天气子类型: {sub_type}")
-                #                 response_packet = handle_weather_request(device_instance, json_payload)
-                #
-                #             elif sub_type == 2:
-                #                 logger.debug(f"[*] 联系人子类型: {sub_type}")
-                #                 response_packet = await handle_contact_request_db(device_instance, json_payload)
-                #
-                #             elif sub_type == 32:
-                #                 logger.debug(f"[*] 应用子类型: {sub_type}")
-                #                 response_packet = handle_apps_request(device_instance, json_payload)
-                #
-                #             else:
-                #                 logger.error(f"[!] 未知子类型: {sub_type}")
-                #                 if json_payload:
-                #                     logger.error(json.dumps(json_payload, indent=2))
-                #         else:
-                #             logger.error(f"[!] 收到类型 123 但无法解析子类型或不是JSON字典")
-                #
-                #     # 你可以在这里添加对其他 msg_type 的处理逻辑
-                #     # ...
-                #
-                #     else:
-                #         logger.warning(f"[!] 未知或未处理的消息类型: {msg_type}")
 
                 if response_packet:
                     logger.debug(f"[*] 响应包:{response_packet[5:]}")
