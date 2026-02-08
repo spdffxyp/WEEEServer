@@ -29,7 +29,7 @@ class LocationPackageAdmin(admin.ModelAdmin):
     def device_link(self, obj):
         if obj.device:
             url = reverse("admin:teemog1_api_watchdevice_change", args=[obj.device.pk])
-            return mark_safe(f'<a href="{url}">{obj.device.udid}</a>')
+            return mark_safe(f'<a href="{url}">{obj.device.nick or obj.device.udid}</a>')
         return "N/A"
 
     @admin.display(description='数据点数量')
@@ -42,7 +42,7 @@ class LocationPackageAdmin(admin.ModelAdmin):
 @admin.register(LocationData)
 class LocationDataAdmin(admin.ModelAdmin):
     ordering = ('-stamp',)
-    list_display = ('stamp_formatted', 'package_link', 'power', 'signal', 'sos')
+    list_display = ('stamp_formatted', 'package_link', 'device_link', 'power', 'signal', 'sos')
     readonly_fields = [field.name for field in LocationData._meta.fields]
     list_filter = ('created_at',)
     search_fields = ('package__device__udid',)  # 允许通过设备UDID搜索
@@ -66,12 +66,19 @@ class LocationDataAdmin(admin.ModelAdmin):
             return datetime.fromtimestamp(obj.stamp).strftime('%Y-%m-%d %H:%M:%S')
         return "N/A"
 
+    @admin.display(description='关联设备')
+    def device_link(self, obj):
+        if obj.package and obj.package.device:
+            url = reverse("admin:teemog1_api_watchdevice_change", args=[obj.package.device.pk])
+            return mark_safe(f'<a href="{url}">{obj.package.device.nick or obj.package.device.udid}</a>')
+        return "N/A"
 
 # --- 3. 定制 WatchDevice 的管理界面 (核心修改) ---
 @admin.register(WatchDevice)
 class WatchDeviceAdmin(admin.ModelAdmin):
     # 在列表页中显示的字段
     list_display = (
+        'nick',
         'udid',
         'baby_id',
         'is_bound',
@@ -81,7 +88,7 @@ class WatchDeviceAdmin(admin.ModelAdmin):
     )
 
     # 在列表页中可以作为链接点击进入详情页的字段
-    list_display_links = ('udid', 'baby_id')
+    list_display_links = ('nick', 'udid', 'baby_id')
 
     # 在列表页右侧提供筛选器
     list_filter = ('is_bound', 'is_halted', 'device_version')
@@ -92,7 +99,7 @@ class WatchDeviceAdmin(admin.ModelAdmin):
     # 在详情页中将字段分组显示
     fieldsets = (
         ('核心身份信息', {
-            'fields': ('udid', 'baby_id', 'is_bound', 'is_halted', 'user')
+            'fields': ('nick', 'udid', 'baby_id', 'is_bound', 'is_halted', 'user')
         }),
         ('硬件与会话信息', {
             'fields': ('imei', 'mac', 'imsi', 'ssn', 'http_token', 'device_version', 'last_login')

@@ -7,6 +7,7 @@ import json
 class WatchDevice(models.Model):
     # 与 Django 内置用户关联，一个用户可以有多个设备
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    nick = models.CharField(max_length=32, default="", unique=False, db_index=False, help_text="昵称")
 
     # 手表硬件信息
     udid = models.CharField(max_length=100, unique=True, db_index=True, help_text="设备唯一识别码")
@@ -41,7 +42,7 @@ class WatchDevice(models.Model):
     last_charging = models.CharField(max_length=8, default="off", null=True, blank=True, help_text="最后一次上报的充电状态")
 
     def __str__(self):
-        return f"Device {self.udid} (Baby ID: {self.baby_id})"
+        return self.nick or f"Device {self.udid} (Baby ID: {self.baby_id})"
 
 
 class LocationPackage(models.Model):

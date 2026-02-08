@@ -238,11 +238,11 @@ def add_contact(request):
     print_request_details(request)
     print("[*] 正在处理添加联系人请求...")
 
-    token = request.data.get('token')
-    baby_id = request.data.get('user_id')
-    name = request.data.get('name')
-    phone = request.data.get('phone')
-    ext_json = request.data.get('ext', '[]')  # 可选的 ext 字段
+    token = request.data.get('token') or request.query_params.get('token')
+    baby_id = request.data.get('user_id') or request.query_params.get('user_id')
+    name = request.data.get('name') or request.query_params.get('name')
+    phone = request.data.get('phone') or request.query_params.get('phone')
+    ext_json = request.data.get('ext', '[]') or request.query_params.get('ext', '[]')   # 可选的 ext 字段
 
     # 验证设备
     try:
@@ -366,9 +366,9 @@ def delete_contact(request):
     print_request_details(request)
     print("[*] 正在处理删除联系人请求...")
 
-    token = request.data.get('token')
-    baby_id = request.data.get('user_id')
-    contact_user_id = request.data.get('id')
+    token = request.data.get('token') or request.query_params.get('token')
+    baby_id = request.data.get('user_id') or request.query_params.get('user_id')
+    contact_user_id = request.data.get('id') or request.query_params.get('id')
 
     # 验证设备
     try:
@@ -406,9 +406,9 @@ def update_contact(request):
     print("[*] 正在处理联系人更新请求...")
 
     # 从 POST 表单数据中获取参数
-    token = request.data.get('token')
-    baby_id = request.data.get('user_id')  # 注意 Java 代码里用的是 'user_id'
-    contact_user_id = request.data.get('id')
+    token = request.data.get('token') or request.query_params.get('token')
+    baby_id = request.data.get('user_id') or request.query_params.get('user_id')  # 注意 Java 代码里用的是 'user_id'
+    contact_user_id = request.data.get('id') or request.query_params.get('id')
 
     # 简单的 token 和 user_id 验证
     try:
@@ -422,13 +422,19 @@ def update_contact(request):
     try:
         if 'name' in request.data:
             contact_to_update.name = request.data['name']
+        elif 'name' in request.query_params:
+            contact_to_update.name = request.query_params['name']
         if 'phone' in request.data:
             contact_to_update.phone = request.data['phone']
+        elif 'phone' in request.query_params:
+            contact_to_update.phone = request.query_params['phone']
         if 'photo' in request.data:
             contact_to_update.photo = request.data['photo']
-        if 'ext' in request.data:
+        elif 'photo' in request.query_params:
+            contact_to_update.photo = request.query_params['photo']
+        if 'ext' in request.data or 'ext' in request.query_params:
             # Java端传来的是 JSON 字符串，我们需要解析
-            ext_json_str = request.data['ext']
+            ext_json_str = request.data.get('ext') or request.query_params.get('ext')
             try:
                 ext_list = json.loads(ext_json_str)
                 contact_to_update.set_ext_phones(ext_list)

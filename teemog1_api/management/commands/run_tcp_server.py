@@ -763,17 +763,23 @@ async def handle_general_message(device_instance: WatchDevice, raw_payload: dict
 
     # logger.debug(f"[*] 子类型: {sub_type}")
     dispatcher = general_dispatcher.get(sub_type, {})
-    logger.info(f"[*] 收到通用类型消息， {sub_type}: {dispatcher['type']}")
-    if 'type' not in dispatcher or 'handler' not in dispatcher:
+    if 'type' not in dispatcher:
         logger.error(f"[!] 未知子类型: {sub_type}")
+        return error_resp
+    logger.info(f"[*] 收到通用类型消息， {sub_type}: {dispatcher['type']}")
+    if 'handler' not in dispatcher:
+        logger.error(f"[!] 未定义handler: {sub_type}")
         return error_resp
 
     handler = dispatcher['handler']
     try:
         if asyncio.iscoroutinefunction(handler):
             return await handler(device_instance, raw_payload)
-        else:
+        elif callable(handler):
             return handler(device_instance, raw_payload)
+        else:
+            logger.error(f"[!] handler类型错误: {type(handler)}")
+            return error_resp
     except Exception as e:
         logger.error(f"{e}")
         return error_resp
@@ -840,9 +846,19 @@ general_dispatcher = {
         'handler': handle_weather_request,
     },
     32: {
-        'type': 'weather',
+        'type': 'app list',
         'parser': parse_teemo_packet,
         'handler': handle_apps_request,
+    },
+    61: {
+        'type': '***** wifi status -- NOT implemented *****',
+        'parser': parse_teemo_packet,
+        'handler': None,
+    },
+    56: {
+        'type': '***** tls toggle -- NOT implemented *****',
+        'parser': parse_teemo_packet,
+        'handler': None,
     },
 }
 
